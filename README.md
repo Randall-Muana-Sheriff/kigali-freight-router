@@ -43,7 +43,10 @@ Code snippet:
    📡 API Endpoints
    
 POST /api/auth/login - Authenticate dispatcher.
+
 POST /api/dispatch/matrix - Request nearest assets and optimal routes.
+
 GET /api/incidents - Retrieve historical log of violations.
+
 Powered by Node.js & Geospatial Intelligence.
 
