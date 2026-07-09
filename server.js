@@ -10,6 +10,7 @@ import authRoutes from './routes/authRoutes.js';
 import geofenceRoutes from './routes/geofenceRoutes.js';
 import dispatchRoutes from './routes/dispatchRoutes.js';
 import routeRoutes from './routes/routeRoutes.js';
+import stopRouter from './routes/stopRoutes.js';
 
 const app = express();
 app.use(cors());
@@ -47,6 +48,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/geofences', geofenceRoutes);
 app.use('/api/dispatch', dispatchRoutes);
 app.use('/api/routes', routeRoutes);
+app.use('/api/stops', stopRouter);
 
 let liveFleetState = {};
 let driverActiveBreaches = {};

@@ -1,10 +1,14 @@
+// routes/routeRoutes.js
 import { Router } from 'express';
 import { RouteController } from '../controllers/routeController.js';
-import { authMiddleware } from '../middleware/authMiddleware.js';
+// Note: Keep your authMiddleware matching how you register your other routes
+import { authMiddleware } from '../middleware/authMiddleware.js'; // Adjust path if needed
 
 const router = Router();
 
-router.get('/', RouteController.getRoutes);
-router.post('/save', authMiddleware(), RouteController.saveRoute);
+// Register all endpoints mapped to the /api/routes prefix in server.js
+router.get('/', authMiddleware(), RouteController.getRoutes);
+router.post('/optimize', authMiddleware(), RouteController.optimizeRoute);
+router.post('/commit', authMiddleware(), RouteController.commitRoute);
 
 export default router;
