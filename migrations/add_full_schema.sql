@@ -146,6 +146,30 @@ CREATE TABLE IF NOT EXISTS fleet_vehicles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE fleet_vehicles
+    ADD COLUMN IF NOT EXISTS plate_number TEXT,
+    ADD COLUMN IF NOT EXISTS vehicle_type TEXT,
+    ADD COLUMN IF NOT EXISTS status TEXT,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+
+UPDATE fleet_vehicles
+SET status = COALESCE(status, 'ACTIVE');
+
+ALTER TABLE fleet_vehicles
+    ALTER COLUMN status SET DEFAULT 'ACTIVE';
+
+CREATE TABLE IF NOT EXISTS delivery_stops (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    lat DOUBLE PRECISION NOT NULL,
+    lng DOUBLE PRECISION NOT NULL,
+    demand INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_stops_status ON delivery_stops (status);
+
 CREATE TABLE IF NOT EXISTS system_audit_logs (
     id SERIAL PRIMARY KEY,
     action_type TEXT NOT NULL,

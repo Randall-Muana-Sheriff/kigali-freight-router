@@ -3,6 +3,7 @@
 // tables that these controllers query.
 import pool from '../config/db.js';
 import { io } from '../server.js';
+import { ok, fail } from '../utils/httpResponse.js';
 
 export const OrderController = {
     // 1. GET /api/v1/orders/active - Fetch pending orders
@@ -24,10 +25,14 @@ export const OrderController = {
                 ORDER BY id DESC;
             `;
             const result = await pool.query(query);
-            res.status(200).json(result.rows);
+            return ok(res, result.rows);
         } catch (error) {
             console.error("Database Error:", error.message);
-            res.status(500).json({ error: "Failed to read freight records." });
+            return fail(res, {
+                status: 500,
+                code: 'ORDERS_ACTIVE_FETCH_FAILED',
+                message: 'Failed to read freight records.',
+            });
         }
     },
 
@@ -77,10 +82,14 @@ export const OrderController = {
             const newOrder = result.rows[0];
             io.emit('order:created', newOrder);
 
-            res.status(201).json({ message: "Order logged successfully.", order: newOrder });
+            return ok(res, { message: "Order logged successfully.", order: newOrder }, { status: 201 });
         } catch (error) {
             console.error("Database Error:", error.message);
-            res.status(500).json({ error: "Failed to process freight manifest entry." });
+            return fail(res, {
+                status: 500,
+                code: 'ORDERS_CREATE_FAILED',
+                message: 'Failed to process freight manifest entry.',
+            });
         }
     },
 
@@ -93,7 +102,11 @@ export const OrderController = {
             const dispatcherEmail = req.user?.email || "SYSTEM_DISPATCH";
 
             if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
-                return res.status(400).json({ error: "Invalid manifest payload." });
+                return fail(res, {
+                    status: 400,
+                    code: 'ORDERS_ASSIGN_INVALID_PAYLOAD',
+                    message: 'Invalid manifest payload.',
+                });
             }
 
             // Fire up ACID-compliant transaction locks
@@ -105,7 +118,11 @@ export const OrderController = {
 
             if (verificationResult.rows.length !== orderIds.length) {
                 await client.query('ROLLBACK');
-                return res.status(409).json({ error: "Assignment conflict. One or more orders were altered by another session." });
+                return fail(res, {
+                    status: 409,
+                    code: 'ORDERS_ASSIGN_CONFLICT',
+                    message: 'Assignment conflict. One or more orders were altered by another session.',
+                });
             }
 
             // Commit the state update
@@ -133,11 +150,18 @@ export const OrderController = {
                 timestamp: new Date().toISOString()
             });
 
-            res.status(200).json({ message: `Dispatched bundle to ${driverName}.`, dispatchedCount: updateResult.rows.length });
+            return ok(res, {
+                message: `Dispatched bundle to ${driverName}.`,
+                dispatchedCount: updateResult.rows.length,
+            });
         } catch (error) {
             await client.query('ROLLBACK');
             console.error("Transaction Aborted! Safe Rollback Executed:", error.message);
-            res.status(500).json({ error: "Failed to execute transaction assignment safely." });
+            return fail(res, {
+                status: 500,
+                code: 'ORDERS_ASSIGN_FAILED',
+                message: 'Failed to execute transaction assignment safely.',
+            });
         } finally {
             client.release(); // Return client back to connection pool
         }
@@ -159,7 +183,11 @@ export const OrderController = {
 
             if (currentResult.rows.length === 0) {
                 await client.query('ROLLBACK');
-                return res.status(404).json({ error: "Order record not found." });
+                return fail(res, {
+                    status: 404,
+                    code: 'ORDERS_NOT_FOUND',
+                    message: 'Order record not found.',
+                });
             }
 
             const previousStatus = currentResult.rows[0].status;
@@ -182,11 +210,15 @@ export const OrderController = {
                 timestamp: new Date().toISOString()
             });
 
-            res.status(200).json({ message: `Milestone updated to [${status}].`, order: updatedOrder });
+            return ok(res, { message: `Milestone updated to [${status}].`, order: updatedOrder });
         } catch (error) {
             await client.query('ROLLBACK');
             console.error("Database Error:", error.message);
-            res.status(500).json({ error: "Failed to update progress milestone safely." });
+            return fail(res, {
+                status: 500,
+                code: 'ORDERS_STATUS_UPDATE_FAILED',
+                message: 'Failed to update progress milestone safely.',
+            });
         } finally {
             client.release();
         }
@@ -211,7 +243,7 @@ export const OrderController = {
             const result = await pool.query(selectQuery);
             const pending = result.rows;
 
-            if (pending.length === 0) return res.status(200).json([]);
+            if (pending.length === 0) return ok(res, []);
 
             const spatialMatrixQuery = `
                 SELECT o1.id AS order_a_id, o2.id AS order_b_id
@@ -253,10 +285,14 @@ export const OrderController = {
                 });
             }
 
-            res.status(200).json(batches);
+            return ok(res, batches);
         } catch (error) {
             console.error("Optimized PostGIS Index Error:", error.message);
-            res.status(500).json({ error: "Spatial matching pipeline calculation error." });
+            return fail(res, {
+                status: 500,
+                code: 'ORDERS_POOLING_FAILED',
+                message: 'Spatial matching pipeline calculation error.',
+            });
         }
     },
 
@@ -271,10 +307,14 @@ export const OrderController = {
                 ORDER BY changed_at ASC;
             `;
             const result = await pool.query(query, [id]);
-            res.status(200).json(result.rows);
+            return ok(res, result.rows);
         } catch (error) {
             console.error("Database Error:", error.message);
-            res.status(500).json({ error: "Failed to read history logs." });
+            return fail(res, {
+                status: 500,
+                code: 'ORDERS_HISTORY_FAILED',
+                message: 'Failed to read history logs.',
+            });
         }
     },
 
@@ -295,7 +335,11 @@ export const OrderController = {
             );
 
             if (orderCheck.rows.length === 0) {
-                return res.status(404).json({ error: "Order not found." });
+                return fail(res, {
+                    status: 404,
+                    code: 'ORDERS_NOT_FOUND',
+                    message: 'Order not found.',
+                });
             }
 
             const order = orderCheck.rows[0];
@@ -326,7 +370,7 @@ export const OrderController = {
                 };
             });
 
-            res.status(200).json({
+            return ok(res, {
                 orderId: order.id,
                 cargo: order.cargo_description,
                 status: order.status,
@@ -334,7 +378,11 @@ export const OrderController = {
             });
         } catch (error) {
             console.error("🚨 Spatial Dispatch Matcher Failure:", error.message);
-            res.status(500).json({ error: "Failed to run spatial dispatch matching algorithms." });
+            return fail(res, {
+                status: 500,
+                code: 'ORDERS_NEAREST_DRIVERS_FAILED',
+                message: 'Failed to run spatial dispatch matching algorithms.',
+            });
         }
     }
 };

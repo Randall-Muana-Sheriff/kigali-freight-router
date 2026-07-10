@@ -1,8 +1,10 @@
+import { ok, fail, errorMessage } from '../utils/httpResponse.js';
+
 export const DispatchController = {
     // POST /api/dispatch/matrix
     getMatrix: async (req, res) => {
         const { targetLat, targetLng, activeFleet } = req.body;
-        if (!activeFleet || activeFleet.length === 0) return res.json({ rankings: [] });
+        if (!activeFleet || activeFleet.length === 0) return ok(res, { rankings: [] });
         try {
             const coordsString =
                 `${targetLng},${targetLat};` + activeFleet.map((d) => `${d.lng},${d.lat}`).join(';');
@@ -22,9 +24,13 @@ export const DispatchController = {
                 })
                 .sort((a, b) => a.distanceKm - b.distanceKm);
 
-            res.json({ rankings });
+            return ok(res, { rankings });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'DISPATCH_MATRIX_FAILED',
+                message: errorMessage(err, 'Failed to compute dispatch matrix.'),
+            });
         }
     },
 };

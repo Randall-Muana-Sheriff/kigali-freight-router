@@ -4,6 +4,7 @@
 // as the live telemetry engine: driver_locations, driver_location_history,
 // geofence_alerts, and the augmented orders table.
 import pool from '../config/db.js';
+import { ok, fail } from '../utils/httpResponse.js';
 
 export const FleetController = {
     getLiveFleetStatus: async (req, res) => {
@@ -47,14 +48,18 @@ export const FleetController = {
                 };
             });
 
-            res.status(200).json({
+            return ok(res, {
                 systemTime: new Date().toISOString(),
                 activeFleetCount: liveFleetReport.length,
                 fleetReport: liveFleetReport
             });
         } catch (error) {
             console.error("🚨 Spatial Analytics Pipeline Error:", error.message);
-            res.status(500).json({ error: "Failed to compile fleet telemetry matrix data." });
+            return fail(res, {
+                status: 500,
+                code: 'FLEET_LIVE_STATUS_FAILED',
+                message: 'Failed to compile fleet telemetry matrix data.',
+            });
         }
     },
 
@@ -94,7 +99,7 @@ export const FleetController = {
                 parseFloat(row.lng)
             ]);
 
-            res.status(200).json({
+            return ok(res, {
                 driverName,
                 algorithm: "Ramer-Douglas-Peucker (PostGIS ST_Simplify)",
                 inputToleranceDegrees: tolerance,
@@ -103,14 +108,18 @@ export const FleetController = {
             });
         } catch (error) {
             console.error("🚨 Downsampling engine crash:", error.message);
-            res.status(500).json({ error: "Failed to compress tracking trajectory." });
+            return fail(res, {
+                status: 500,
+                code: 'FLEET_BREADCRUMBS_FAILED',
+                message: 'Failed to compress tracking trajectory.',
+            });
         }
     },
 
     // Add this method to your existing FleetController object
-getFleetPerformanceReport: async (req, res) => {
-    try {
-        const analyticsQuery = `
+    getFleetPerformanceReport: async (req, res) => {
+        try {
+            const analyticsQuery = `
             SELECT 
                 o.assigned_to AS driver_name,
                 COUNT(o.id) AS total_completed_orders,
@@ -128,21 +137,25 @@ getFleetPerformanceReport: async (req, res) => {
             ORDER BY avg_dwell_minutes DESC;
         `;
 
-        const result = await pool.query(analyticsQuery);
+            const result = await pool.query(analyticsQuery);
 
-        res.status(200).json({
-            generatedAt: new Date().toISOString(),
-            metricScope: "Completed Orders Turnaround Analysis",
-            fleetMetrics: result.rows.map(row => ({
-                driverName: row.driver_name,
-                completedDeliveriesCount: parseInt(row.total_completed_orders),
-                averageUnloadingDwellTimeMinutes: parseFloat(row.avg_dwell_minutes),
-                worstCaseDwellTimeMinutes: parseFloat(row.max_dwell_minutes)
-            }))
-        });
-    } catch (error) {
-        console.error("🚨 Analytics Engine Failure:", error.message);
-        res.status(500).json({ error: "Failed to compile fleet operational analytics reports." });
-    }
+            return ok(res, {
+                generatedAt: new Date().toISOString(),
+                metricScope: "Completed Orders Turnaround Analysis",
+                fleetMetrics: result.rows.map(row => ({
+                    driverName: row.driver_name,
+                    completedDeliveriesCount: parseInt(row.total_completed_orders, 10),
+                    averageUnloadingDwellTimeMinutes: parseFloat(row.avg_dwell_minutes),
+                    worstCaseDwellTimeMinutes: parseFloat(row.max_dwell_minutes)
+                }))
+            });
+        } catch (error) {
+            console.error("🚨 Analytics Engine Failure:", error.message);
+            return fail(res, {
+                status: 500,
+                code: 'FLEET_PERFORMANCE_FAILED',
+                message: 'Failed to compile fleet operational analytics reports.',
+            });
+        }
     }
 };

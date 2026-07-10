@@ -2,6 +2,7 @@
 import pool from '../config/db.js';
 import { io } from '../server.js';
 import { appendAuditLog } from '../services/auditLogService.js';
+import { ok, fail, errorMessage } from '../utils/httpResponse.js';
 
 export const StopController = {
     // GET pending stops
@@ -10,9 +11,13 @@ export const StopController = {
             const result = await pool.query(
                 "SELECT id, name, lat, lng, demand FROM delivery_stops WHERE status = 'PENDING' ORDER BY id DESC"
             );
-            res.json(result.rows);
+            return ok(res, result.rows);
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'STOPS_FETCH_FAILED',
+                message: errorMessage(err, 'Failed to fetch stops.'),
+            });
         }
     },
 
@@ -20,7 +25,11 @@ export const StopController = {
     createStop: async (req, res) => {
         const { name, lat, lng, demand } = req.body;
         if (!name || lat === undefined || lng === undefined) {
-            return res.status(400).json({ error: 'Name, latitude, and longitude are required.' });
+            return fail(res, {
+                status: 400,
+                code: 'STOPS_INVALID_PAYLOAD',
+                message: 'Name, latitude, and longitude are required.',
+            });
         }
         
         try {
@@ -34,9 +43,13 @@ export const StopController = {
                 description: `Created delivery stop ${result.rows[0].name}`,
                 username: req.user?.username || 'System',
             });
-            res.json({ success: true, stop: result.rows[0] });
+            return ok(res, { stop: result.rows[0] }, { status: 201 });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'STOPS_CREATE_FAILED',
+                message: errorMessage(err, 'Failed to create stop.'),
+            });
         }
     },
 
@@ -49,7 +62,11 @@ export const StopController = {
                 [id]
             );
             if (result.rowCount === 0) {
-                return res.status(404).json({ error: 'Stop not found in database.' });
+                return fail(res, {
+                    status: 404,
+                    code: 'STOPS_NOT_FOUND',
+                    message: 'Stop not found in database.',
+                });
             }
             io.emit('stopUpdated', { id, deleted: true });
             await appendAuditLog({
@@ -57,9 +74,13 @@ export const StopController = {
                 description: `Deleted delivery stop ${result.rows[0].name}`,
                 username: req.user?.username || 'System',
             });
-            res.json({ success: true, deleted: result.rows[0] });
+            return ok(res, { deleted: result.rows[0] });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'STOPS_DELETE_FAILED',
+                message: errorMessage(err, 'Failed to delete stop.'),
+            });
         }
     }
 };

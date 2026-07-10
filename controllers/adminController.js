@@ -1,42 +1,18 @@
 import pool from '../config/db.js';
 import { appendAuditLog } from '../services/auditLogService.js';
-
-let adminSchemaReady = false;
-
-async function ensureAdminSchema() {
-    if (adminSchemaReady) return;
-
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS fleet_vehicles (
-            id SERIAL PRIMARY KEY,
-            plate_number TEXT NOT NULL,
-            vehicle_type TEXT NOT NULL,
-            current_driver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            status TEXT NOT NULL DEFAULT 'ACTIVE',
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    `);
-
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS system_audit_logs (
-            id SERIAL PRIMARY KEY,
-            action_type TEXT NOT NULL,
-            description TEXT NOT NULL,
-            username TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    `);
-
-    adminSchemaReady = true;
-}
+import { ok, fail, errorMessage } from '../utils/httpResponse.js';
 
 export const AdminController = {
     getUsers: async (req, res) => {
         try {
             const result = await pool.query('SELECT id, username, role FROM users ORDER BY id DESC');
-            res.json(result.rows);
+            return ok(res, result.rows);
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'ADMIN_USERS_FETCH_FAILED',
+                message: errorMessage(error, 'Failed to fetch users.'),
+            });
         }
     },
 
@@ -45,7 +21,11 @@ export const AdminController = {
         const { role } = req.body;
 
         if (!role) {
-            return res.status(400).json({ error: 'Role is required.' });
+            return fail(res, {
+                status: 400,
+                code: 'ADMIN_ROLE_REQUIRED',
+                message: 'Role is required.',
+            });
         }
 
         try {
@@ -55,7 +35,11 @@ export const AdminController = {
             );
 
             if (result.rowCount === 0) {
-                return res.status(404).json({ error: 'User not found.' });
+                return fail(res, {
+                    status: 404,
+                    code: 'ADMIN_USER_NOT_FOUND',
+                    message: 'User not found.',
+                });
             }
 
             await appendAuditLog({
@@ -64,15 +48,18 @@ export const AdminController = {
                 username: req.user?.username || 'System',
             });
 
-            res.json({ success: true, user: result.rows[0] });
+            return ok(res, { user: result.rows[0] });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'ADMIN_ROLE_UPDATE_FAILED',
+                message: errorMessage(error, 'Failed to update user role.'),
+            });
         }
     },
 
     getVehicles: async (req, res) => {
         try {
-            await ensureAdminSchema();
             const result = await pool.query(
                 `SELECT
                     id,
@@ -83,20 +70,27 @@ export const AdminController = {
                  FROM fleet_vehicles
                  ORDER BY id DESC`
             );
-            res.json(result.rows);
+            return ok(res, result.rows);
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'ADMIN_VEHICLES_FETCH_FAILED',
+                message: errorMessage(error, 'Failed to fetch vehicles.'),
+            });
         }
     },
 
     createVehicle: async (req, res) => {
         const { name, type } = req.body;
         if (!name || !type) {
-            return res.status(400).json({ error: 'Vehicle name and type are required.' });
+            return fail(res, {
+                status: 400,
+                code: 'ADMIN_VEHICLE_INVALID_PAYLOAD',
+                message: 'Vehicle name and type are required.',
+            });
         }
 
         try {
-            await ensureAdminSchema();
             const result = await pool.query(
                 `INSERT INTO fleet_vehicles (plate_number, vehicle_type)
                  VALUES ($1, $2)
@@ -110,9 +104,13 @@ export const AdminController = {
                 username: req.user?.username || 'System',
             });
 
-            res.status(201).json({ success: true, vehicle: result.rows[0] });
+            return ok(res, { vehicle: result.rows[0] }, { status: 201 });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'ADMIN_VEHICLE_CREATE_FAILED',
+                message: errorMessage(error, 'Failed to create vehicle.'),
+            });
         }
     },
 
@@ -121,11 +119,14 @@ export const AdminController = {
         const { driverId } = req.body;
 
         if (!driverId) {
-            return res.status(400).json({ error: 'Driver ID is required.' });
+            return fail(res, {
+                status: 400,
+                code: 'ADMIN_DRIVER_REQUIRED',
+                message: 'Driver ID is required.',
+            });
         }
 
         try {
-            await ensureAdminSchema();
             const result = await pool.query(
                 `UPDATE fleet_vehicles
                  SET current_driver_id = $1
@@ -135,7 +136,11 @@ export const AdminController = {
             );
 
             if (result.rowCount === 0) {
-                return res.status(404).json({ error: 'Vehicle not found.' });
+                return fail(res, {
+                    status: 404,
+                    code: 'ADMIN_VEHICLE_NOT_FOUND',
+                    message: 'Vehicle not found.',
+                });
             }
 
             await appendAuditLog({
@@ -144,24 +149,31 @@ export const AdminController = {
                 username: req.user?.username || 'System',
             });
 
-            res.json({ success: true, vehicle: result.rows[0] });
+            return ok(res, { vehicle: result.rows[0] });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'ADMIN_VEHICLE_ASSIGN_FAILED',
+                message: errorMessage(error, 'Failed to assign vehicle.'),
+            });
         }
     },
 
     getAuditLogs: async (req, res) => {
         try {
-            await ensureAdminSchema();
             const result = await pool.query(
                 `SELECT id, action_type AS "actionType", description, username, created_at AS "timestamp"
                  FROM system_audit_logs
                  ORDER BY created_at DESC
                  LIMIT 100`
             );
-            res.json(result.rows);
+            return ok(res, result.rows);
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'ADMIN_AUDIT_FETCH_FAILED',
+                message: errorMessage(error, 'Failed to fetch audit logs.'),
+            });
         }
     },
 };

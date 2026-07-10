@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 import { io } from '../server.js';
 import { appendAuditLog } from '../services/auditLogService.js';
+import { ok, fail, errorMessage } from '../utils/httpResponse.js';
 
 export const GeofenceController = {
     // GET /api/geofences
@@ -15,9 +16,13 @@ export const GeofenceController = {
                 speedLimitKmh: row.speed_limit_kmh || 60,
                 geojson: JSON.parse(row.geojson),
             }));
-            res.json(optimizedList);
+            return ok(res, optimizedList);
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'GEOFENCE_FETCH_FAILED',
+                message: errorMessage(err, 'Failed to fetch geofences.'),
+            });
         }
     },
 
@@ -46,9 +51,13 @@ export const GeofenceController = {
                 description: `Saved geofence ${name} with limit ${finalSpeedLimit} km/h`,
                 username: req.user?.username || 'System',
             });
-            res.json({ success: true, message: `Polygon zone "${name}" with limit ${finalSpeedLimit} km/h saved.` });
+            return ok(res, { message: `Polygon zone "${name}" with limit ${finalSpeedLimit} km/h saved.` });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'GEOFENCE_SAVE_FAILED',
+                message: errorMessage(err, 'Failed to save geofence.'),
+            });
         }
     },
 
@@ -63,9 +72,13 @@ export const GeofenceController = {
                 description: `Deleted geofence ${id}`,
                 username: req.user?.username || 'System',
             });
-            res.json({ success: true });
+            return ok(res, { deleted: true, id });
         } catch (err) {
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'GEOFENCE_DELETE_FAILED',
+                message: errorMessage(err, 'Failed to delete geofence.'),
+            });
         }
     },
 };

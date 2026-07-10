@@ -3,6 +3,7 @@ import pool from '../config/db.js';
 import { io } from '../server.js';
 import { solveVRP } from '../services/vrpOptimizer.js';
 import { appendAuditLog } from '../services/auditLogService.js';
+import { ok, fail, errorMessage } from '../utils/httpResponse.js';
 
 function normalizeRouteCoordinates(routePath) {
     if (!routePath) return [];
@@ -48,10 +49,14 @@ export const RouteController = {
     getRoutes: async (req, res) => {
         try {
             const result = await pool.query('SELECT * FROM completed_routes ORDER BY id DESC');
-            res.json({ success: true, data: result.rows });
+            return ok(res, result.rows);
         } catch (err) {
             console.error('❌ Fetch Routes Failed:', err.message);
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'ROUTES_FETCH_FAILED',
+                message: errorMessage(err, 'Failed to fetch routes.'),
+            });
         }
     },
 
@@ -67,16 +72,17 @@ export const RouteController = {
                 totalLoad: route.totalLoad,
             }));
 
-            res.json({
-                success: true,
-                data: {
-                    routes,
-                    summary: solution.summary,
-                }
+            return ok(res, {
+                routes,
+                summary: solution.summary,
             });
         } catch (err) {
             console.error('❌ Optimization Failed:', err.message);
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'ROUTES_OPTIMIZE_FAILED',
+                message: errorMessage(err, 'Failed to optimize route.'),
+            });
         }
     },
 
@@ -97,10 +103,14 @@ export const RouteController = {
                 description: `Saved route snapshot for ${driverName || 'Dispatcher Snapshot'}`,
                 username: req.user?.username || 'System',
             });
-            res.json({ success: true, route: result.rows[0] });
+            return ok(res, { route: result.rows[0] });
         } catch (err) {
             console.error('❌ Route snapshot save failed:', err.message);
-            res.status(500).json({ error: err.message });
+            return fail(res, {
+                status: 500,
+                code: 'ROUTES_SNAPSHOT_SAVE_FAILED',
+                message: errorMessage(err, 'Failed to save route snapshot.'),
+            });
         }
     },
 
@@ -130,10 +140,14 @@ export const RouteController = {
                 description: `Committed route for ${driverName || `Driver #${parsedVehicleId}`}`,
                 username: req.user?.username || 'System',
             });
-            res.json({ success: true, route: result.rows[0] });
+            return ok(res, { route: result.rows[0] });
         } catch (err) {
             console.error('❌ DETAILED DB COMMIT ERROR:', err.message);
-            res.status(500).json({ error: `Database error: ${err.message}` });
+            return fail(res, {
+                status: 500,
+                code: 'ROUTES_COMMIT_FAILED',
+                message: `Database error: ${err.message}`,
+            });
         }
     }
 };

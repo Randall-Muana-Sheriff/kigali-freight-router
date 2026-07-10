@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { fail } from '../utils/httpResponse.js';
 
 export const authMiddleware = (allowedRoles = []) => {
     return (req, res, next) => {
@@ -7,7 +8,11 @@ export const authMiddleware = (allowedRoles = []) => {
         const token = authHeader && authHeader.split(' ')[1]; // Splits "Bearer <token>"
 
         if (!token) {
-            return res.status(401).json({ error: "Access denied. Security token is missing." });
+            return fail(res, {
+                status: 401,
+                code: 'AUTH_TOKEN_MISSING',
+                message: 'Access denied. Security token is missing.',
+            });
         }
 
         try {
@@ -20,12 +25,20 @@ export const authMiddleware = (allowedRoles = []) => {
 
             // Check if user's role matches the endpoint privileges
             if (normalizedAllowedRoles.length > 0 && !normalizedAllowedRoles.includes(normalizedUserRole)) {
-                return res.status(403).json({ error: "Access forbidden. Insufficient clearance level." });
+                return fail(res, {
+                    status: 403,
+                    code: 'AUTH_FORBIDDEN',
+                    message: 'Access forbidden. Insufficient clearance level.',
+                });
             }
 
             next(); // Everything looks good, pass control to the controller
         } catch (error) {
-            return res.status(403).json({ error: "Session expired or invalid token." });
+            return fail(res, {
+                status: 403,
+                code: 'AUTH_INVALID_TOKEN',
+                message: 'Session expired or invalid token.',
+            });
         }
     };
 };

@@ -4,6 +4,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
+import { fileURLToPath } from 'url';
 
 import pool from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
@@ -22,10 +23,16 @@ app.use(express.json());
 const JWT_SECRET = process.env.JWT_SECRET;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
+const __filename = fileURLToPath(import.meta.url);
+const isMainModule = process.argv[1] === __filename;
 
 if (!JWT_SECRET) {
-  console.error('❌ JWT_SECRET is not set in .env — auth will fail. See .env.example.');
-  process.exit(1);
+  const message = '❌ JWT_SECRET is not set in .env — auth will fail. See .env.example.';
+  if (isMainModule) {
+    console.error(message);
+    process.exit(1);
+  }
+  throw new Error(message);
 }
 
 const server = http.createServer(app);
@@ -150,9 +157,27 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`🚀 Secured Core Telemetry Routing Engine online on port ${PORT}`);
-});
+function startServer(port = process.env.PORT || 5000) {
+  return new Promise((resolve, reject) => {
+    if (server.listening) {
+      resolve(server);
+      return;
+    }
 
-export { io };
+    server.once('error', reject);
+    server.listen(port, () => {
+      server.off('error', reject);
+      console.log(`🚀 Secured Core Telemetry Routing Engine online on port ${port}`);
+      resolve(server);
+    });
+  });
+}
+
+if (isMainModule) {
+  startServer().catch((error) => {
+    console.error('❌ Failed to start server:', error.message);
+    process.exit(1);
+  });
+}
+
+export { app, server, io, startServer };

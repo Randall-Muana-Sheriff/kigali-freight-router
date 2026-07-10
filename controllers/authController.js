@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import { ok, fail, errorMessage } from '../utils/httpResponse.js';
 
 const ALLOWED_ROLES = ['admin', 'manager', 'dispatcher'];
 
@@ -9,7 +10,11 @@ export const AuthController = {
     register: async (req, res) => {
         const { username, password, role } = req.body;
         if (!username || !password) {
-            return res.status(400).json({ error: 'Username and password are required' });
+            return fail(res, {
+                status: 400,
+                code: 'AUTH_INVALID_PAYLOAD',
+                message: 'Username and password are required',
+            });
         }
         try {
             const assignedRole = role && ALLOWED_ROLES.includes(role) ? role : 'dispatcher';
@@ -29,17 +34,28 @@ export const AuthController = {
                 { expiresIn: '2h' }
             );
 
-            return res.status(201).json({
-                success: true,
-                token,
-                role: newUser.role,
-                message: 'User registered successfully'
-            });
+            return ok(
+                res,
+                {
+                    token,
+                    role: newUser.role,
+                    message: 'User registered successfully',
+                },
+                { status: 201 }
+            );
         } catch (error) {
             if (error.code === '23505') { // PostgreSQL unique violation error code
-                return res.status(400).json({ error: 'Username is already taken' });
+                return fail(res, {
+                    status: 400,
+                    code: 'AUTH_USERNAME_TAKEN',
+                    message: 'Username is already taken',
+                });
             }
-            return res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'AUTH_REGISTER_FAILED',
+                message: errorMessage(error, 'Registration failed.'),
+            });
         }
     },
 
@@ -47,24 +63,36 @@ export const AuthController = {
     login: async (req, res) => {
         const { username, password } = req.body;
         if (!username) {
-            return res.status(400).json({ error: 'Username is required' });
+            return fail(res, {
+                status: 400,
+                code: 'AUTH_INVALID_PAYLOAD',
+                message: 'Username is required',
+            });
         }
         try {
             // Preserve the simulator bypass: sim_driver* accounts skip DB lookup entirely
             if (username.startsWith('sim_driver')) {
                 const token = jwt.sign({ username, role: 'dispatcher' }, process.env.JWT_SECRET, { expiresIn: '2h' });
-                return res.json({ token, role: 'dispatcher' });
+                return ok(res, { token, role: 'dispatcher' });
             }
 
             const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
             if (result.rows.length === 0) {
-                return res.status(401).json({ error: 'Invalid username or password' });
+                return fail(res, {
+                    status: 401,
+                    code: 'AUTH_INVALID_CREDENTIALS',
+                    message: 'Invalid username or password',
+                });
             }
 
             const user = result.rows[0];
             const isMatch = await bcrypt.compare(password || '', user.password_hash);
             if (!isMatch) {
-                return res.status(401).json({ error: 'Invalid username or password' });
+                return fail(res, {
+                    status: 401,
+                    code: 'AUTH_INVALID_CREDENTIALS',
+                    message: 'Invalid username or password',
+                });
             }
 
             const token = jwt.sign(
@@ -73,9 +101,13 @@ export const AuthController = {
                 { expiresIn: '2h' }
             );
 
-            return res.status(200).json({ token, role: user.role });
+            return ok(res, { token, role: user.role });
         } catch (error) {
-            return res.status(500).json({ error: error.message });
+            return fail(res, {
+                status: 500,
+                code: 'AUTH_LOGIN_FAILED',
+                message: errorMessage(error, 'Login failed.'),
+            });
         }
     }
 };
