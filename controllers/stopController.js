@@ -1,5 +1,7 @@
 // controllers/stopController.js
 import pool from '../config/db.js';
+import { io } from '../server.js';
+import { appendAuditLog } from '../services/auditLogService.js';
 
 export const StopController = {
     // GET pending stops
@@ -26,6 +28,12 @@ export const StopController = {
                 `INSERT INTO delivery_stops (name, lat, lng, demand, status) VALUES ($1, $2, $3, $4, 'PENDING') RETURNING *`,
                 [name, lat, lng, demand || 1]
             );
+            io.emit('stopUpdated', result.rows[0]);
+            await appendAuditLog({
+                actionType: 'STOP_CREATED',
+                description: `Created delivery stop ${result.rows[0].name}`,
+                username: req.user?.username || 'System',
+            });
             res.json({ success: true, stop: result.rows[0] });
         } catch (err) {
             res.status(500).json({ error: err.message });
@@ -43,6 +51,12 @@ export const StopController = {
             if (result.rowCount === 0) {
                 return res.status(404).json({ error: 'Stop not found in database.' });
             }
+            io.emit('stopUpdated', { id, deleted: true });
+            await appendAuditLog({
+                actionType: 'STOP_DELETED',
+                description: `Deleted delivery stop ${result.rows[0].name}`,
+                username: req.user?.username || 'System',
+            });
             res.json({ success: true, deleted: result.rows[0] });
         } catch (err) {
             res.status(500).json({ error: err.message });

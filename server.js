@@ -9,6 +9,9 @@ import pool from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import geofenceRoutes from './routes/geofenceRoutes.js';
 import dispatchRoutes from './routes/dispatchRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
+import orderRoutes from './routes/orderRoutes.js';
+import fleetRoutes from './routes/fleetRoutes.js';
 import routeRoutes from './routes/routeRoutes.js';
 import stopRouter from './routes/stopRoutes.js';
 
@@ -47,6 +50,9 @@ async function dispatchExternalAlert(message) {
 app.use('/api/auth', authRoutes);
 app.use('/api/geofences', geofenceRoutes);
 app.use('/api/dispatch', dispatchRoutes);
+app.use('/api', adminRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/fleet', fleetRoutes);
 app.use('/api/routes', routeRoutes);
 app.use('/api/stops', stopRouter);
 
@@ -81,6 +87,20 @@ io.on('connection', (socket) => {
     liveFleetState[driverName] = { driverName, lat, lng, velocityKmh: currentVelocityKmh, lastSeen: timestamp };
     io.emit('driver:location-update', liveFleetState[driverName]);
     try {
+      await pool.query(
+        `INSERT INTO driver_location_history (driver_name, lat, lng, geom, recorded_at)
+         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($3, $2), 4326), NOW())`,
+        [driverName, lat, lng]
+      );
+
+      await pool.query(
+        `INSERT INTO driver_locations (driver_name, lat, lng, geom, updated_at)
+         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($3, $2), 4326), NOW())
+         ON CONFLICT (driver_name)
+         DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng, geom = EXCLUDED.geom, updated_at = NOW()`,
+        [driverName, lat, lng]
+      );
+
       const boundaryCheck = await pool.query(
         `SELECT id, name, speed_limit_kmh AS "speedLimitKmh" FROM geofences WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326)) LIMIT 1;`,
         [lng, lat]
@@ -96,6 +116,11 @@ io.on('connection', (socket) => {
           : `Unauthorized Zone Entry: [${activeZone.name}]`;
         if (!ongoingViolation || ongoingViolation.zoneName !== activeZone.name || ongoingViolation.type !== violationType) {
           driverActiveBreaches[driverName] = { zoneName: activeZone.name, type: violationType, description };
+          await pool.query(
+            `INSERT INTO geofence_alerts (order_id, driver_name, event_type, description, distance_meters, created_at)
+             VALUES ($1, $2, $3, $4, $5, NOW())`,
+            [null, driverName, violationType, description, 0]
+          );
           const incidentPayload = {
             id: `incident-${Date.now()}`,
             driverName,
@@ -111,6 +136,11 @@ io.on('connection', (socket) => {
         }
       } else if (!activeZone && ongoingViolation) {
         delete driverActiveBreaches[driverName];
+        await pool.query(
+          `INSERT INTO geofence_alerts (order_id, driver_name, event_type, description, distance_meters, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [null, driverName, 'ZONE_EXIT', `${driverName} exited ${ongoingViolation.zoneName}`, 0]
+        );
         io.emit('geofence:exit', { driverName, zoneName: ongoingViolation.zoneName, exitedAt: timestamp });
         dispatchExternalAlert(`✅ *RESOLVED:* ${driverName} has safely departed the restricted perimeter.`);
       }

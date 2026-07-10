@@ -10,9 +10,10 @@ async function runMigration() {
     console.log('🔄 Initializing spatial database schema orchestration...');
     
     try {
-        // Read the SQL migration file
+        // Read the SQL migration files
         const sqlFilePath = path.join(__dirname, '../migrations/init_spatial.sql');
-        const schemaSql = fs.readFileSync(sqlFilePath, 'utf8');
+        const fullSchemaPath = path.join(__dirname, '../migrations/add_full_schema.sql');
+        const schemaSql = `${fs.readFileSync(sqlFilePath, 'utf8')}\n${fs.readFileSync(fullSchemaPath, 'utf8')}`;
         
         // Execute schema initialization
         await pool.query(schemaSql);

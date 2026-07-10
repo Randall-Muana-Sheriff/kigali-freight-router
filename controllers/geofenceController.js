@@ -1,4 +1,6 @@
 import pool from '../config/db.js';
+import { io } from '../server.js';
+import { appendAuditLog } from '../services/auditLogService.js';
 
 export const GeofenceController = {
     // GET /api/geofences
@@ -38,6 +40,12 @@ export const GeofenceController = {
                 'INSERT INTO geofences (name, speed_limit_kmh, geom) VALUES ($1, $2, ST_GeomFromText($3, 4326)) ON CONFLICT (name) DO UPDATE SET geom = EXCLUDED.geom, speed_limit_kmh = EXCLUDED.speed_limit_kmh',
                 [name, finalSpeedLimit, wktPolygon]
             );
+            io.emit('geofenceUpdated', { name, speedLimitKmh: finalSpeedLimit });
+            await appendAuditLog({
+                actionType: 'GEOFENCE_SAVED',
+                description: `Saved geofence ${name} with limit ${finalSpeedLimit} km/h`,
+                username: req.user?.username || 'System',
+            });
             res.json({ success: true, message: `Polygon zone "${name}" with limit ${finalSpeedLimit} km/h saved.` });
         } catch (err) {
             res.status(500).json({ error: err.message });
@@ -49,6 +57,12 @@ export const GeofenceController = {
         const { id } = req.params;
         try {
             await pool.query('DELETE FROM geofences WHERE id = $1', [id]);
+            io.emit('geofenceUpdated', { id, deleted: true });
+            await appendAuditLog({
+                actionType: 'GEOFENCE_DELETED',
+                description: `Deleted geofence ${id}`,
+                username: req.user?.username || 'System',
+            });
             res.json({ success: true });
         } catch (err) {
             res.status(500).json({ error: err.message });

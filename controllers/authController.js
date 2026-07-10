@@ -2,11 +2,6 @@ import pool from '../config/db.js';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 
-// NOTE: matches the ACTUAL live `users` table schema (id, username, password_hash, role).
-// Confirmed via `\d users` against the running database on 2026-07-07 —
-// this table has NO `name`/`email` columns, despite what migrations/add_users.sql describes.
-// That migration file documents an aspirational future schema that was never applied.
-
 const ALLOWED_ROLES = ['admin', 'manager', 'dispatcher'];
 
 export const AuthController = {

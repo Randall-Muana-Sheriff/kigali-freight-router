@@ -1,9 +1,8 @@
 // controllers/fleetController.js
 //
-// ⚠️ NOT CURRENTLY WIRED UP. This targets a future schema (driver_locations,
-// driver_location_history, geofence_alerts tables) that does not exist yet in
-// the live database — only `users`, `orders` (basic), `routes`, and `geofences`
-// are currently migrated. Do not mount these routes until that schema exists.
+// Fleet analytics and history routes are backed by the same migration bundle
+// as the live telemetry engine: driver_locations, driver_location_history,
+// geofence_alerts, and the augmented orders table.
 import pool from '../config/db.js';
 
 export const FleetController = {
@@ -16,10 +15,10 @@ export const FleetController = {
                     o.assigned_to AS driver_name,
                     dl.lat AS current_driver_lat,
                     dl.lng AS current_driver_lng,
-                    o.delivery_lat AS target_delivery_lat,
-                    o.delivery_lng AS target_delivery_lng,
+                    COALESCE(o.delivery_lat, ST_Y(COALESCE(o.delivery_geom, o.delivery_coordinates))) AS target_delivery_lat,
+                    COALESCE(o.delivery_lng, ST_X(COALESCE(o.delivery_geom, o.delivery_coordinates))) AS target_delivery_lng,
                     -- Compute exact distance remaining using native PostGIS spatial matching
-                    ST_DistanceSphere(dl.geom, o.delivery_geom) AS distance_meters,
+                    ST_DistanceSphere(dl.geom, COALESCE(o.delivery_geom, o.delivery_coordinates)) AS distance_meters,
                     -- Check telemetry freshness
                     EXTRACT(EPOCH FROM (NOW() - dl.updated_at)) AS telemetry_age_seconds
                 FROM orders o
@@ -70,7 +69,7 @@ export const FleetController = {
             const compressionQuery = `
                 WITH spatial_collection AS (
                     -- Step 1: Aggregate individual pings into a chronological path
-                    SELECT ST_MakeLine(geom ORDER BY recorded_at) AS raw_trajectory
+                                        SELECT ST_MakeLine(geom ORDER BY recorded_at) AS raw_trajectory
                     FROM driver_location_history
                     WHERE driver_name = $1 
                       AND recorded_at >= NOW() - (INTERVAL '1 hour' * $2::int)

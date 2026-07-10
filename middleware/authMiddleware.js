@@ -15,8 +15,11 @@ export const authMiddleware = (allowedRoles = []) => {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             req.user = decoded; // Attach the user profile data directly to the request object
 
+            const normalizedUserRole = String(req.user.role || '').toLowerCase();
+            const normalizedAllowedRoles = allowedRoles.map((role) => String(role).toLowerCase());
+
             // Check if user's role matches the endpoint privileges
-            if (allowedRoles.length > 0 && !allowedRoles.includes(req.user.role)) {
+            if (normalizedAllowedRoles.length > 0 && !normalizedAllowedRoles.includes(normalizedUserRole)) {
                 return res.status(403).json({ error: "Access forbidden. Insufficient clearance level." });
             }
 

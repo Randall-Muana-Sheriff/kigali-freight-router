@@ -1,10 +1,6 @@
-// ⚠️ NOT CURRENTLY WIRED UP. This targets a future orders schema with PostGIS
-// geometry columns, driver assignment, and audit logs (order_status_logs,
-// driver_locations) that does not exist in the live database yet — only the
-// basic `orders` table from migrations/create_orders.sql is migrated.
-// Do not mount these routes until that schema exists.
-// (The `io` import below now resolves correctly since server.js exports it,
-// but the underlying tables/columns this controller queries still don't exist.)
+// Order lifecycle routes are now backed by the full freight schema.
+// The migration bundle creates the missing geometry, assignment, and audit
+// tables that these controllers query.
 import pool from '../config/db.js';
 import { io } from '../server.js';
 
@@ -12,7 +8,21 @@ export const OrderController = {
     // 1. GET /api/v1/orders/active - Fetch pending orders
     getActiveOrders: async (req, res) => {
         try {
-            const query = `SELECT id, cargo_description, status, weight_kg, origin_hub_name, pickup_lng, pickup_lat, delivery_lng, delivery_lat FROM orders WHERE status = 'PENDING' ORDER BY id DESC;`;
+            const query = `
+                SELECT
+                    id,
+                    cargo_description,
+                    status,
+                    weight_kg,
+                    origin_hub_name,
+                    pickup_lng,
+                    pickup_lat,
+                    delivery_lng,
+                    delivery_lat
+                FROM orders
+                WHERE status = 'PENDING'
+                ORDER BY id DESC;
+            `;
             const result = await pool.query(query);
             res.status(200).json(result.rows);
         } catch (error) {
@@ -31,11 +41,31 @@ export const OrderController = {
             
             const query = `
                 INSERT INTO orders (
-                    cargo_description, weight_kg, origin_hub_name, 
-                    pickup_lng, pickup_lat, delivery_lng, delivery_lat,
-                    pickup_geom, delivery_geom
+                    cargo_description,
+                    weight_kg,
+                    origin_hub_name,
+                    pickup_lng,
+                    pickup_lat,
+                    delivery_lng,
+                    delivery_lat,
+                    pickup_coordinates,
+                    delivery_coordinates,
+                    pickup_geom,
+                    delivery_geom
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($4, $5), 4326), ST_SetSRID(ST_MakePoint($6, $7), 4326))
+                VALUES (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    ST_SetSRID(ST_MakePoint($4, $5), 4326),
+                    ST_SetSRID(ST_MakePoint($6, $7), 4326),
+                    ST_SetSRID(ST_MakePoint($4, $5), 4326),
+                    ST_SetSRID(ST_MakePoint($6, $7), 4326)
+                )
                 RETURNING id, cargo_description, status, weight_kg, origin_hub_name, pickup_lng, pickup_lat, delivery_lng, delivery_lat;
             `;
             
@@ -81,7 +111,7 @@ export const OrderController = {
             // Commit the state update
             const updateQuery = `
                 UPDATE orders 
-                SET status = 'ASSIGNED', assigned_to = $1 
+                SET status = 'ASSIGNED', assigned_to = $1, updated_at = NOW()
                 WHERE id = ANY($2)
                 RETURNING id, cargo_description, status;
             `;
@@ -135,7 +165,7 @@ export const OrderController = {
             const previousStatus = currentResult.rows[0].status;
 
             // Commit state shift
-            const updateQuery = `UPDATE orders SET status = $1 WHERE id = $2 RETURNING id, cargo_description, status;`;
+            const updateQuery = `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, cargo_description, status;`;
             const result = await client.query(updateQuery, [status, id]);
             const updatedOrder = result.rows[0];
 
@@ -165,7 +195,19 @@ export const OrderController = {
     // 5. GET /api/v1/orders/pooling - Index-Driven PostGIS Spatial Cluster Matching
     getBatchedOrders: async (req, res) => {
         try {
-            const selectQuery = `SELECT id, cargo_description, weight_kg, origin_hub_name, pickup_lng, pickup_lat, delivery_lng, delivery_lat FROM orders WHERE status = 'PENDING';`;
+            const selectQuery = `
+                SELECT
+                    id,
+                    cargo_description,
+                    weight_kg,
+                    origin_hub_name,
+                    pickup_lng,
+                    pickup_lat,
+                    delivery_lng,
+                    delivery_lat
+                FROM orders
+                WHERE status = 'PENDING';
+            `;
             const result = await pool.query(selectQuery);
             const pending = result.rows;
 
@@ -176,8 +218,8 @@ export const OrderController = {
                 FROM orders o1
                 JOIN orders o2 ON o1.id < o2.id
                 WHERE o1.status = 'PENDING' AND o2.status = 'PENDING'
-                  AND ST_DWithin(o1.pickup_geom::GEOGRAPHY, o2.pickup_geom::GEOGRAPHY, 1500)
-                  AND ST_DWithin(o1.delivery_geom::GEOGRAPHY, o2.delivery_geom::GEOGRAPHY, 3500);
+                AND ST_DWithin(COALESCE(o1.pickup_geom, o1.pickup_coordinates)::GEOGRAPHY, COALESCE(o2.pickup_geom, o2.pickup_coordinates)::GEOGRAPHY, 1500)
+                AND ST_DWithin(COALESCE(o1.delivery_geom, o1.delivery_coordinates)::GEOGRAPHY, COALESCE(o2.delivery_geom, o2.delivery_coordinates)::GEOGRAPHY, 3500);
             `;
             
             const matrixResult = await pool.query(spatialMatrixQuery);
@@ -242,7 +284,13 @@ export const OrderController = {
 
             // 1. Fetch the order's pickup geometry
             const orderCheck = await pool.query(
-                "SELECT id, cargo_description, pickup_geom, status FROM orders WHERE id = $1;", 
+                `SELECT
+                    id,
+                    cargo_description,
+                    COALESCE(pickup_geom, pickup_coordinates) AS pickup_geom,
+                    status
+                 FROM orders
+                 WHERE id = $1;`,
                 [id]
             );
 
