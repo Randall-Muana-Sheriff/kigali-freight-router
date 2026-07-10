@@ -1,52 +1,215 @@
-# Kigali Freight Control Tower - Backend
+# Kigali Freight Router Backend
 
-The core intelligence and connectivity layer for the Kigali Freight Control Tower. This server handles real-time asset telemetry, routing calculations, and geospatial boundary enforcement.
+Backend API and realtime telemetry engine for the Kigali Freight system.
 
-## 🧠 System Architecture
-The backend is an event-driven engine that processes high-frequency location pings and integrates with OSRM (Open Source Routing Machine) to provide optimized logistics routing.
+## Overview
+This service provides:
 
-## 🚀 Core Features
-- **Real-Time Telemetry:** Socket.io server to handle persistent connections from asset simulators.
-- **Geospatial Optimization:** Integration with OSRM for distance/duration matrices and route geometry.
-- **Incident Engine:** Automated detection of speed limit and geofence violations.
-- **Security:** JWT-based authentication for dispatchers and managers.
+- JWT authentication and role-based authorization.
+- REST APIs for orders, routes, geofences, fleet analytics, stops, and admin controls.
+- Socket.IO realtime telemetry ingestion and broadcast.
+- Postgres/PostGIS-backed spatial operations.
+- Migration-based schema management with migration tracking.
 
-## ⚙️ Tech Stack
-- **Environment:** Node.js, Express
-- **Real-Time:** Socket.io
-- **Routing API:** OSRM (Open Source Routing Machine)
-- **Authentication:** JSON Web Tokens (JWT), Bcrypt
+## Tech Stack
 
-## 🚀 Setup & Installation
+- Node.js (ES modules)
+- Express
+- PostgreSQL + PostGIS
+- Socket.IO
+- JWT + bcrypt
 
-### 1. Prerequisites
-- Node.js (v18+)
-- OSRM Backend (Local or API access)
+## Project Structure
 
-### 2. Installation
-1. Clone the repository.
-2. Install dependencies:
-   ```bash
-   npm install
+- `server.js`: app bootstrap, route registration, Socket.IO telemetry flow.
+- `controllers/`: request handlers.
+- `routes/`: API route definitions.
+- `middleware/authMiddleware.js`: JWT and role checks.
+- `migrations/`: SQL migrations.
+- `bin/migrate.js`: migration runner with tracking table.
+- `tests/integration.test.js`: critical integration tests.
+- `utils/httpResponse.js`: API response envelope helpers.
 
-Set up environment variables (create a .env file):
+## Prerequisites
 
-Code snippet:
+- Node.js 18+
+- PostgreSQL 14+
+- PostGIS extension available on target DB
 
-      PORT=5000
-      JWT_SECRET=your_super_secret_key
-      
- Run the server:
- 
-    node Server.js
+## Environment Variables
 
-   📡 API Endpoints
-   
-POST /api/auth/login - Authenticate dispatcher.
+Create `.env` in the backend root.
 
-POST /api/dispatch/matrix - Request nearest assets and optimal routes.
+```env
+PORT=5000
 
-GET /api/incidents - Retrieve historical log of violations.
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_HOST=localhost
+DB_PORT=5432
+DB_DATABASE=kigali_freight_coop
 
-Powered by Node.js & Geospatial Intelligence.
+REDIS_URL=
+
+JWT_SECRET=replace_with_a_strong_secret
+
+# Optional: incident notifications
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+
+# Optional: legacy destructive baseline (DANGEROUS)
+# Keep unset for normal environments.
+ALLOW_DESTRUCTIVE_BASELINE=0
+```
+
+## Install
+
+```bash
+npm install
+```
+
+## Migration Workflow
+
+Run migrations before starting the server:
+
+```bash
+npm run migrate
+```
+
+### Migration Safety Model
+
+- Primary baseline is non-destructive: `migrations/init_spatial_baseline.sql`.
+- Additive schema updates run via tracked migrations in `schema_migrations`.
+- Legacy destructive baseline `migrations/init_spatial.sql` is opt-in only via `ALLOW_DESTRUCTIVE_BASELINE=1`.
+
+## Run
+
+Production mode:
+
+```bash
+npm start
+```
+
+Development mode:
+
+```bash
+npm run dev
+```
+
+## Test
+
+Integration tests (auth, vehicle assignment, order flow, telemetry persistence):
+
+```bash
+npm run test:integration
+```
+
+## API Response Contract
+
+Success:
+
+```json
+{
+   "success": true,
+   "data": {}
+}
+```
+
+Error:
+
+```json
+{
+   "success": false,
+   "error": {
+      "code": "SOME_ERROR_CODE",
+      "message": "Human readable message"
+   }
+}
+```
+
+## REST Endpoints
+
+Base URL: `http://localhost:5000`
+
+Auth:
+
+- `POST /api/auth/signup`
+- `POST /api/auth/login`
+
+Dispatch:
+
+- `POST /api/dispatch/matrix`
+
+Geofences:
+
+- `GET /api/geofences`
+- `POST /api/geofences`
+- `DELETE /api/geofences/:id`
+
+Orders:
+
+- `POST /api/orders`
+- `GET /api/orders/active`
+- `GET /api/orders/pooling`
+- `POST /api/orders/assign`
+- `PATCH /api/orders/:id/status`
+- `GET /api/orders/:id/history`
+- `GET /api/orders/:id/nearest-drivers`
+
+Routes:
+
+- `GET /api/routes`
+- `POST /api/routes/optimize`
+- `POST /api/routes/save`
+- `POST /api/routes/commit`
+
+Stops:
+
+- `GET /api/stops`
+- `POST /api/stops`
+- `DELETE /api/stops/:id`
+
+Fleet:
+
+- `GET /api/fleet/telemetry-sheet`
+- `GET /api/fleet/history/:driverName`
+- `GET /api/fleet/analytics/performance`
+
+Admin:
+
+- `GET /api/users`
+- `PATCH /api/users/:id/role`
+- `GET /api/vehicles`
+- `POST /api/vehicles`
+- `PATCH /api/vehicles/:id/assign`
+- `GET /api/audit-logs`
+
+## Socket.IO Events
+
+Client emit:
+
+- `driver:telemetry-push` payload: `{ driverName, lat, lng }`
+
+Server emit:
+
+- `fleet:snapshot`
+- `driver:location-update`
+- `geofence:violation`
+- `geofence:exit`
+- `routeUpdated`
+- `stopUpdated`
+
+## Common Issues
+
+- Port in use (`EADDRINUSE`): free port 5000 or change `PORT`.
+- PostGIS errors: verify `CREATE EXTENSION postgis` is permitted and migration ran.
+- 401/403 responses: confirm JWT token and role authorization.
+- Empty data after startup: run `npm run migrate` and verify DB credentials.
+
+## Security Notes
+
+- Do not commit `.env`.
+- Use strong `JWT_SECRET` in production.
+- Restrict CORS origin for production deployment.
+- Keep `ALLOW_DESTRUCTIVE_BASELINE` unset in shared/prod databases.
 
