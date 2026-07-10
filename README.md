@@ -206,10 +206,3 @@ Server emit:
 - 401/403 responses: confirm JWT token and role authorization.
 - Empty data after startup: run `npm run migrate` and verify DB credentials.
 
-## Security Notes
-
-- Do not commit `.env`.
-- Use strong `JWT_SECRET` in production.
-- Restrict CORS origin for production deployment.
-- Keep `ALLOW_DESTRUCTIVE_BASELINE` unset in shared/prod databases.
-
