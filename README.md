@@ -47,7 +47,7 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 DB_HOST=localhost
 DB_PORT=5432
-DB_DATABASE=kigali_freight_coop
+DB_DATABASE=your_database_name
 
 REDIS_URL=
 
