@@ -5,8 +5,10 @@ import { authMiddleware } from '../middleware/authMiddleware.js';
 
 const router = Router();
 
-router.get('/', authMiddleware(), StopController.getStops);
-router.post('/', authMiddleware(), StopController.createStop);
-router.delete('/:id', authMiddleware(), StopController.deleteStop); // Add this line
+const OPERATIONAL_ROLES = ['ADMIN', 'DISPATCHER'];
+
+router.get('/', authMiddleware(OPERATIONAL_ROLES), StopController.getStops);
+router.post('/', authMiddleware(OPERATIONAL_ROLES), StopController.createStop);
+router.delete('/:id', authMiddleware(OPERATIONAL_ROLES), StopController.deleteStop); // Add this line
 
 export default router;

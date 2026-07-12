@@ -1,19 +1,20 @@
 import pg from 'pg';
-import dotenv from 'dotenv';
-
-dotenv.config();
+import { appConfig } from './appConfig.js';
 
 const { Pool } = pg;
 
 const pool = new Pool({
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    database: process.env.DB_DATABASE,
+    user: appConfig.db.user,
+    password: appConfig.db.password,
+    host: appConfig.db.host,
+    port: appConfig.db.port,
+    database: appConfig.db.database,
 });
 
+let hasLoggedConnection = false;
 pool.on('connect', () => {
+    if (hasLoggedConnection) return;
+    hasLoggedConnection = true;
     console.log('🐘 PostgreSQL Co-op Database connected successfully.');
 });
 

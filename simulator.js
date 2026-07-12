@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 
-const BACKEND_URL = 'http://localhost:5000';
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 const SIMULATED_TRUCKS_COUNT = 45; 
 
 console.log(`⚡ Launching High-Density Fleet Stress Load Simulator Engine...`);
@@ -12,20 +12,8 @@ async function spawnVirtualAsset(truckIndex) {
   const driverName = `Simulated Hauler #${String(truckIndex).padStart(3, '0')}`;
   
   try {
-    const authRes = await fetch(`${BACKEND_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: `sim_driver_${truckIndex}`, password: 'loop_bypass' })
-    });
-    const authData = await authRes.json();
-    
-    if (!authData.token) {
-      console.error(`❌ Simulator Auth Rejected for ${driverName}`);
-      return;
-    }
-
     const socket = io(BACKEND_URL, {
-      auth: { token: `Bearer ${authData.token}` },
+      auth: { username: `sim_driver_${truckIndex}` },
       transports: ['websocket']
     });
 

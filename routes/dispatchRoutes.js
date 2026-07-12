@@ -4,6 +4,6 @@ import { authMiddleware } from '../middleware/authMiddleware.js';
 
 const router = Router();
 
-router.post('/matrix', authMiddleware(), DispatchController.getMatrix);
+router.post('/matrix', authMiddleware(['ADMIN', 'DISPATCHER']), DispatchController.getMatrix);
 
 export default router;

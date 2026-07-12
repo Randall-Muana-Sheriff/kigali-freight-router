@@ -11,6 +11,8 @@ const MIGRATIONS = [
     { id: 'init_spatial_baseline.sql', destructive: false },
     { id: 'add_full_schema.sql', destructive: false },
     { id: 'add_geofence_speed_limit.sql', destructive: false },
+    { id: 'consolidate_roles.sql', destructive: false },
+    { id: 'add_push_tokens.sql', destructive: false },
 ];
 
 const LEGACY_DESTRUCTIVE_MIGRATION = 'init_spatial.sql';

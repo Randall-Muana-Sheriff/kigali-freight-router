@@ -5,7 +5,7 @@ import request from 'supertest';
 import { io as socketClient } from 'socket.io-client';
 
 import pool from '../config/db.js';
-import { app, server, startServer } from '../server.js';
+import { app, server, startServer, shutdownServices } from '../server.js';
 
 const requiredEnv = ['DB_USER', 'DB_PASSWORD', 'DB_HOST', 'DB_PORT', 'DB_DATABASE', 'JWT_SECRET'];
 const hasIntegrationEnv = requiredEnv.every((key) => Boolean(process.env[key]));
@@ -60,6 +60,22 @@ if (!hasIntegrationEnv) {
     test('auth flow returns valid token payload', async () => {
         assert.ok(adminToken);
         assert.ok(dispatcherToken);
+    });
+
+    test('health and readiness endpoints respond correctly', async () => {
+        const healthResponse = await request(app).get('/health');
+        assert.equal(healthResponse.statusCode, 200);
+        assert.equal(healthResponse.body.success, true);
+        assert.equal(healthResponse.body.data.status, 'ok');
+
+        const readyResponse = await request(app).get('/ready');
+        assert.equal(readyResponse.statusCode, 200);
+        assert.equal(readyResponse.body.success, true);
+        assert.equal(readyResponse.body.data.status, 'ready');
+
+        const metricsResponse = await request(app).get('/metrics');
+        assert.equal(metricsResponse.statusCode, 200);
+        assert.match(metricsResponse.text, /kigali_http_requests_total/);
     });
 
     test('vehicles list and assignment flow', async () => {
@@ -181,10 +197,40 @@ if (!hasIntegrationEnv) {
         socket.disconnect();
     });
 
+    test('telemetry queue exposes live metric counters after ingestion', async () => {
+        const socket = socketClient(`http://127.0.0.1:${socketPort}`, {
+            auth: { token: `Bearer ${dispatcherToken}` },
+            transports: ['websocket'],
+        });
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Socket connection timed out.')), 7000);
+            socket.on('connect', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+            socket.on('connect_error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+        });
+
+        socket.emit('driver:telemetry-push', {
+            driverName: `it_queue_driver_${uniqueId}`,
+            lat: -1.948,
+            lng: 30.081,
+        });
+
+        await delay(600);
+
+        const metricsResponse = await request(app).get('/metrics');
+        assert.equal(metricsResponse.statusCode, 200);
+        assert.match(metricsResponse.text, /kigali_socket_events_by_name_total/);
+
+        socket.disconnect();
+    });
+
     test.after(async () => {
-        if (server.listening) {
-            await new Promise((resolve) => server.close(resolve));
-        }
-        await pool.end();
+        await shutdownServices();
     });
 }

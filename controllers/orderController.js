@@ -4,8 +4,50 @@
 import pool from '../config/db.js';
 import { io } from '../server.js';
 import { ok, fail } from '../utils/httpResponse.js';
+import { sendPushToUser } from '../services/pushNotificationService.js';
+
+const ALLOWED_ORDER_STATUSES = ['PENDING', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'ARRIVED', 'DELIVERED', 'CANCELLED'];
 
 export const OrderController = {
+    // Driver view of assigned jobs
+    getDriverAssignments: async (req, res) => {
+        try {
+            const username = req.user?.username;
+            if (!username) {
+                return fail(res, {
+                    status: 400,
+                    code: 'DRIVER_USERNAME_MISSING',
+                    message: 'Driver identity is missing in session token.',
+                });
+            }
+
+            const query = `
+                SELECT
+                    id,
+                    cargo_description,
+                    status,
+                    origin_hub_name,
+                    delivery_lng,
+                    delivery_lat,
+                    updated_at
+                FROM orders
+                WHERE LOWER(COALESCE(assigned_to, '')) = LOWER($1)
+                  AND UPPER(COALESCE(status, 'PENDING')) NOT IN ('DELIVERED', 'CANCELLED')
+                ORDER BY updated_at DESC NULLS LAST, id DESC;
+            `;
+
+            const result = await pool.query(query, [username]);
+            return ok(res, result.rows);
+        } catch (error) {
+            console.error('Database Error:', error.message);
+            return fail(res, {
+                status: 500,
+                code: 'DRIVER_ASSIGNMENTS_FETCH_FAILED',
+                message: 'Failed to read assigned driver jobs.',
+            });
+        }
+    },
+
     // 1. GET /api/v1/orders/active - Fetch pending orders
     getActiveOrders: async (req, res) => {
         try {
@@ -150,6 +192,14 @@ export const OrderController = {
                 timestamp: new Date().toISOString()
             });
 
+            // Best-effort: a driver's phone being unreachable should never
+            // fail the dispatch itself (the assignment is already committed).
+            sendPushToUser(driverName, {
+                title: 'New delivery assigned',
+                body: `${updateResult.rows.length} job(s) dispatched to you.`,
+                data: { type: 'order-assigned', orderIds: orderIds.join(',') },
+            });
+
             return ok(res, {
                 message: `Dispatched bundle to ${driverName}.`,
                 dispatchedCount: updateResult.rows.length,
@@ -175,10 +225,19 @@ export const OrderController = {
             const { status } = req.body;
             const userEmail = req.user?.email || "SYSTEM_DRIVER";
 
+            if (typeof status !== 'string' || !ALLOWED_ORDER_STATUSES.includes(status.toUpperCase())) {
+                return fail(res, {
+                    status: 400,
+                    code: 'ORDERS_INVALID_STATUS',
+                    message: `Status must be one of: ${ALLOWED_ORDER_STATUSES.join(', ')}.`,
+                });
+            }
+            const normalizedStatus = status.toUpperCase();
+
             await client.query('BEGIN');
 
             // Fetch the current state to populate previous status columns
-            const currentQuery = `SELECT status FROM orders WHERE id = $1 FOR UPDATE;`;
+            const currentQuery = `SELECT status, assigned_to FROM orders WHERE id = $1 FOR UPDATE;`;
             const currentResult = await client.query(currentQuery, [id]);
 
             if (currentResult.rows.length === 0) {
@@ -191,15 +250,26 @@ export const OrderController = {
             }
 
             const previousStatus = currentResult.rows[0].status;
+            const assignedTo = currentResult.rows[0].assigned_to;
+            const requesterRole = String(req.user?.role || '').toLowerCase();
+
+            if (requesterRole === 'driver' && String(assignedTo || '').toLowerCase() !== String(req.user?.username || '').toLowerCase()) {
+                await client.query('ROLLBACK');
+                return fail(res, {
+                    status: 403,
+                    code: 'ORDERS_STATUS_FORBIDDEN',
+                    message: 'Drivers may only update orders assigned to them.',
+                });
+            }
 
             // Commit state shift
             const updateQuery = `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, cargo_description, status;`;
-            const result = await client.query(updateQuery, [status, id]);
+            const result = await client.query(updateQuery, [normalizedStatus, id]);
             const updatedOrder = result.rows[0];
 
             // Log changes
             const logQuery = `INSERT INTO order_status_logs (order_id, previous_status, new_status, changed_by) VALUES ($1, $2, $3, $4);`;
-            await client.query(logQuery, [id, previousStatus, status, userEmail]);
+            await client.query(logQuery, [id, previousStatus, normalizedStatus, userEmail]);
 
             await client.query('COMMIT');
 

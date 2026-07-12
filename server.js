@@ -3,8 +3,16 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import { fileURLToPath } from 'url';
+import { appConfig } from './config/appConfig.js';
+import { isRedisEnabled, createRedisDuplicate, closeRedisClients } from './config/redisClient.js';
+import systemRoutes from './routes/systemRoutes.js';
+import { requestContext } from './middleware/requestContext.js';
+import { metricsMiddleware, observeSocketEvent } from './middleware/metrics.js';
+import { createTelemetryQueue, FLEET_STATE_KEY } from './services/telemetryQueue.js';
+import { hashGetAll } from './services/sharedState.js';
 
 import pool from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
@@ -15,33 +23,91 @@ import orderRoutes from './routes/orderRoutes.js';
 import fleetRoutes from './routes/fleetRoutes.js';
 import routeRoutes from './routes/routeRoutes.js';
 import stopRouter from './routes/stopRoutes.js';
+import incidentRoutes from './routes/incidentRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+const allowedOrigins = appConfig.corsOrigins;
 
-const JWT_SECRET = process.env.JWT_SECRET;
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '';
+// This is a JSON API (not an HTML-serving app), so disable helmet's CSP —
+// it has no effect on API responses and only complicates configuring the
+// separate frontend's own CSP.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('CORS origin not allowed'));
+    },
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+  })
+);
+app.use(requestContext);
+app.use(metricsMiddleware);
+app.use(express.json({ limit: '1mb' }));
+
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    console.log(
+      JSON.stringify({
+        level: 'info',
+        requestId: req.requestId,
+        method: req.method,
+        path: req.originalUrl,
+        statusCode: res.statusCode,
+        durationMs: res.locals.requestDurationMs || undefined,
+      })
+    );
+  });
+  next();
+});
+
+const JWT_SECRET = appConfig.jwtSecret;
+const TELEGRAM_BOT_TOKEN = appConfig.telegramBotToken;
+const TELEGRAM_CHAT_ID = appConfig.telegramChatId;
+const ALERT_WEBHOOK_URL = appConfig.alertWebhookUrl;
 const __filename = fileURLToPath(import.meta.url);
 const isMainModule = process.argv[1] === __filename;
 
-if (!JWT_SECRET) {
-  const message = '❌ JWT_SECRET is not set in .env — auth will fail. See .env.example.';
-  if (isMainModule) {
-    console.error(message);
-    process.exit(1);
-  }
-  throw new Error(message);
-}
-
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
+const io = new Server(server, { cors: { origin: allowedOrigins, methods: ['GET', 'POST'] } });
+
+// Tracked so shutdownServices() can close them; the adapter doesn't own
+// these connections, so nothing else closes them for us.
+let redisAdapterClients = [];
+
+// In a multi-instance deployment (REDIS_URL set), attach the Redis adapter so
+// io.emit() fans out to sockets connected to *any* instance, not just this
+// process. Without Redis, Socket.IO falls back to its default in-memory
+// adapter, which only works correctly for a single instance.
+if (isRedisEnabled()) {
+  const [pubClient, subClient] = await Promise.all([createRedisDuplicate(), createRedisDuplicate()]);
+  if (pubClient && subClient) {
+    redisAdapterClients = [pubClient, subClient];
+    const { createAdapter } = await import('@socket.io/redis-adapter');
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('🔗 Socket.IO Redis adapter attached — safe to run multiple instances.');
+  }
+}
 
 async function dispatchExternalAlert(message) {
   console.log(`[INCIDENT TELEMETRY]: ${message}`);
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
+    if (ALERT_WEBHOOK_URL) {
+      await fetch(ALERT_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'kigali-freight-router', message }),
+      });
+      return;
+    }
+
+    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -54,6 +120,7 @@ async function dispatchExternalAlert(message) {
 
 // Route modules — replaces what used to be duplicated inline in this file.
 // See controllers/ and routes/ for the actual handler logic.
+app.use('/', systemRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/geofences', geofenceRoutes);
 app.use('/api/dispatch', dispatchRoutes);
@@ -62,16 +129,28 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/fleet', fleetRoutes);
 app.use('/api/routes', routeRoutes);
 app.use('/api/stops', stopRouter);
+app.use('/api/incidents', incidentRoutes);
+app.use('/api/notifications', notificationRoutes);
 
-let liveFleetState = {};
-let driverActiveBreaches = {};
+const telemetryQueue = createTelemetryQueue({
+  pool,
+  io,
+  dispatchExternalAlert,
+});
 
 io.use((socket, next) => {
   const tokenHeader = socket.handshake.auth?.token;
   const handshakeUsername = socket.handshake.auth?.username;
+  const simulatorSecret = socket.handshake.auth?.simulatorSecret;
 
-  // Gracefully allow simulator nodes to connect without token check
-  if (handshakeUsername && handshakeUsername.startsWith('sim_driver')) {
+  // Simulator nodes may skip JWT auth only when a shared secret is configured
+  // and the caller presents it. Disabled by default (no SIMULATOR_SHARED_SECRET set).
+  if (
+    appConfig.simulatorSharedSecret &&
+    handshakeUsername &&
+    handshakeUsername.startsWith('sim_driver') &&
+    simulatorSecret === appConfig.simulatorSharedSecret
+  ) {
     socket.user = { username: handshakeUsername, role: 'dispatcher' };
     return next();
   }
@@ -85,79 +164,30 @@ io.use((socket, next) => {
   });
 });
 
-io.on('connection', (socket) => {
-  socket.emit('fleet:snapshot', Object.values(liveFleetState));
+io.on('connection', async (socket) => {
+  observeSocketEvent('connection');
+  const fleetSnapshot = await hashGetAll(FLEET_STATE_KEY);
+  socket.emit('fleet:snapshot', Object.values(fleetSnapshot));
   socket.on('driver:telemetry-push', async (data) => {
+    observeSocketEvent('driver:telemetry-push');
+    if (!data || typeof data.driverName !== 'string' || !data.driverName.trim() || typeof data.lat !== 'number' || typeof data.lng !== 'number' || !Number.isFinite(data.lat) || !Number.isFinite(data.lng)) {
+      return;
+    }
     const { driverName, lat, lng } = data;
     const timestamp = new Date().toISOString();
     const currentVelocityKmh = Math.floor(Math.random() * (85 - 40 + 1)) + 40;
-    liveFleetState[driverName] = { driverName, lat, lng, velocityKmh: currentVelocityKmh, lastSeen: timestamp };
-    io.emit('driver:location-update', liveFleetState[driverName]);
     try {
-      await pool.query(
-        `INSERT INTO driver_location_history (driver_name, lat, lng, geom, recorded_at)
-         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($3, $2), 4326), NOW())`,
-        [driverName, lat, lng]
-      );
-
-      await pool.query(
-        `INSERT INTO driver_locations (driver_name, lat, lng, geom, updated_at)
-         VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($3, $2), 4326), NOW())
-         ON CONFLICT (driver_name)
-         DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng, geom = EXCLUDED.geom, updated_at = NOW()`,
-        [driverName, lat, lng]
-      );
-
-      const boundaryCheck = await pool.query(
-        `SELECT id, name, speed_limit_kmh AS "speedLimitKmh" FROM geofences WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint($1, $2), 4326)) LIMIT 1;`,
-        [lng, lat]
-      );
-      const activeZone = boundaryCheck.rows[0];
-      const ongoingViolation = driverActiveBreaches[driverName];
-      if (activeZone) {
-        const speedThreshold = activeZone.speedLimitKmh;
-        const isSpeeding = currentVelocityKmh > speedThreshold;
-        const violationType = isSpeeding ? 'SPEED_VIOLATION' : 'BOUNDARY_BREACH';
-        const description = isSpeeding
-          ? `Speed limit breach inside [${activeZone.name}]. Value: ${currentVelocityKmh} km/h (Limit: ${speedThreshold} km/h)`
-          : `Unauthorized Zone Entry: [${activeZone.name}]`;
-        if (!ongoingViolation || ongoingViolation.zoneName !== activeZone.name || ongoingViolation.type !== violationType) {
-          driverActiveBreaches[driverName] = { zoneName: activeZone.name, type: violationType, description };
-          await pool.query(
-            `INSERT INTO geofence_alerts (order_id, driver_name, event_type, description, distance_meters, created_at)
-             VALUES ($1, $2, $3, $4, $5, NOW())`,
-            [null, driverName, violationType, description, 0]
-          );
-          const incidentPayload = {
-            id: `incident-${Date.now()}`,
-            driverName,
-            zoneName: activeZone.name,
-            type: violationType,
-            description,
-            enteredAt: timestamp,
-          };
-          io.emit('geofence:violation', incidentPayload);
-          dispatchExternalAlert(
-            `🚨 *CRITICAL SAFETY INCIDENT* 🚨\n\n*Asset:* ${driverName}\n*Incident:* ${violationType}\n*Detail:* ${description}\n*Timestamp:* ${new Date(timestamp).toLocaleTimeString()}`
-          );
-        }
-      } else if (!activeZone && ongoingViolation) {
-        delete driverActiveBreaches[driverName];
-        await pool.query(
-          `INSERT INTO geofence_alerts (order_id, driver_name, event_type, description, distance_meters, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [null, driverName, 'ZONE_EXIT', `${driverName} exited ${ongoingViolation.zoneName}`, 0]
-        );
-        io.emit('geofence:exit', { driverName, zoneName: ongoingViolation.zoneName, exitedAt: timestamp });
-        dispatchExternalAlert(`✅ *RESOLVED:* ${driverName} has safely departed the restricted perimeter.`);
-      }
+      await telemetryQueue.enqueue({ driverName, lat, lng, timestamp, currentVelocityKmh });
     } catch (dbErr) {
       console.error('❌ DATABASE ERROR:', dbErr);
     }
   });
+  socket.on('disconnect', () => {
+    observeSocketEvent('disconnect');
+  });
 });
 
-function startServer(port = process.env.PORT || 5000) {
+function startServer(port = appConfig.port) {
   return new Promise((resolve, reject) => {
     if (server.listening) {
       resolve(server);
@@ -178,6 +208,33 @@ if (isMainModule) {
     console.error('❌ Failed to start server:', error.message);
     process.exit(1);
   });
+
+  // Graceful shutdown: stop accepting new work, flush the telemetry queue,
+  // close Redis connections and the DB pool, then exit. Container
+  // orchestrators (Kubernetes, ECS, etc.) send SIGTERM on scale-down/deploy;
+  // without this, in-flight telemetry could be dropped and connections
+  // would be left dangling.
+  const handleShutdownSignal = (signal) => {
+    console.log(`🛡️ Received ${signal}, shutting down gracefully...`);
+    shutdownServices()
+      .then(() => process.exit(0))
+      .catch((error) => {
+        console.error('❌ Error during graceful shutdown:', error.message);
+        process.exit(1);
+      });
+  };
+  process.on('SIGTERM', () => handleShutdownSignal('SIGTERM'));
+  process.on('SIGINT', () => handleShutdownSignal('SIGINT'));
 }
 
-export { app, server, io, startServer };
+async function shutdownServices() {
+  await telemetryQueue.shutdown();
+  if (server.listening) {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  await Promise.all(redisAdapterClients.map((client) => client.quit().catch(() => {})));
+  await closeRedisClients();
+  await pool.end();
+}
+
+export { app, server, io, startServer, shutdownServices };

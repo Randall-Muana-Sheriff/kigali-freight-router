@@ -2,8 +2,7 @@ import pool from '../config/db.js';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { ok, fail, errorMessage } from '../utils/httpResponse.js';
-
-const ALLOWED_ROLES = ['admin', 'manager', 'dispatcher'];
+import { ALLOWED_ROLES } from '../utils/roles.js';
 
 export const AuthController = {
     // Register a new user account
@@ -70,12 +69,6 @@ export const AuthController = {
             });
         }
         try {
-            // Preserve the simulator bypass: sim_driver* accounts skip DB lookup entirely
-            if (username.startsWith('sim_driver')) {
-                const token = jwt.sign({ username, role: 'dispatcher' }, process.env.JWT_SECRET, { expiresIn: '2h' });
-                return ok(res, { token, role: 'dispatcher' });
-            }
-
             const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
             if (result.rows.length === 0) {
                 return fail(res, {

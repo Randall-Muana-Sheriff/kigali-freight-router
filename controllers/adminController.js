@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 import { appendAuditLog } from '../services/auditLogService.js';
 import { ok, fail, errorMessage } from '../utils/httpResponse.js';
+import { ALLOWED_ROLES } from '../utils/roles.js';
 
 export const AdminController = {
     getUsers: async (req, res) => {
@@ -25,6 +26,14 @@ export const AdminController = {
                 status: 400,
                 code: 'ADMIN_ROLE_REQUIRED',
                 message: 'Role is required.',
+            });
+        }
+
+        if (!ALLOWED_ROLES.includes(String(role).toLowerCase())) {
+            return fail(res, {
+                status: 400,
+                code: 'ADMIN_ROLE_INVALID',
+                message: `Role must be one of: ${ALLOWED_ROLES.join(', ')}.`,
             });
         }
 
